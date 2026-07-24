@@ -6,8 +6,8 @@ set -Eeuo pipefail
 # 运行时会交互询问要创建并允许 SSH 登录的管理员用户名。
 ADMIN_USER="${ADMIN_USER:-}"
 
-# SSH 端口。保持 22 最省心；修改后登录时需要使用 ssh -p 指定端口。
-SSH_PORT="${SSH_PORT:-22}"
+# SSH 端口。云厂商防火墙也必须放行相同的 TCP 端口。
+SSH_PORT="${SSH_PORT:-201}"
 
 # 时区。
 TIMEZONE="${TIMEZONE:-Asia/Shanghai}"
