@@ -226,6 +226,9 @@ configure_ssh() {
   local config_error=""
   rollback_dir="$(mktemp -d)"
 
+  # sshd -t 在部分精简系统或尚未启动过 SSH 服务的机器上要求此目录存在。
+  install -d -o root -g root -m 0755 /run/sshd
+
   cp -a /etc/ssh/sshd_config "${rollback_dir}/sshd_config"
   if [[ -f "${SSH_DROP_IN}" ]]; then
     cp -a "${SSH_DROP_IN}" "${rollback_dir}/ssh_drop_in"
