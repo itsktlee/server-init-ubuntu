@@ -123,7 +123,7 @@ prepare_admin_user() {
 
   log "授予 ${ADMIN_USER} sudo 权限"
   usermod -aG sudo "${ADMIN_USER}"
-  warn "SSH 配置生效后，只允许 ${ADMIN_USER} 远程登录；请保持当前会话在线直到测试完成。"
+  warn "SSH 配置生效后，请保持当前会话在线，直到 ${ADMIN_USER} 的新连接测试成功。"
 }
 
 validate_settings() {
@@ -188,12 +188,34 @@ install_base_system() {
     openssh-server \
     ca-certificates curl wget \
     vim git rsync tar unzip \
-    lsof dnsutils jq bash-completion \
+    lsof dnsutils jq bash-completion iproute2 \
     ufw chrony fail2ban
 
   log "设置时区为 ${TIMEZONE}"
   timedatectl set-timezone "${TIMEZONE}"
   systemctl enable --now chrony
+}
+
+restore_ssh_config() {
+  local rollback_dir="$1"
+  local had_drop_in="$2"
+
+  cp -a "${rollback_dir}/sshd_config" /etc/ssh/sshd_config
+  if [[ "${had_drop_in}" == "yes" ]]; then
+    cp -a "${rollback_dir}/ssh_drop_in" "${SSH_DROP_IN}"
+  else
+    rm -f "${SSH_DROP_IN}"
+  fi
+}
+
+reload_ssh() {
+  # Ubuntu 24.04 可能通过 ssh.socket 监听端口，daemon-reload 会重新运行
+  # systemd 的 SSH socket generator，使 Port 配置真正生效。
+  systemctl daemon-reload
+  if systemctl is-active --quiet ssh.socket; then
+    systemctl restart ssh.socket
+  fi
+  systemctl reload-or-restart ssh.service
 }
 
 configure_ssh() {
@@ -226,7 +248,6 @@ Port ${SSH_PORT}
 PermitRootLogin no
 PasswordAuthentication yes
 PubkeyAuthentication yes
-AllowUsers ${ADMIN_USER}
 PermitEmptyPasswords no
 UsePAM yes
 MaxAuthTries 5
@@ -250,24 +271,25 @@ EOF
       config_error="SSH 最终配置未成功开启密码认证。"
     grep -qx 'pubkeyauthentication yes' <<<"${effective_config}" ||
       config_error="SSH 最终配置未成功开启公钥认证。"
-    grep -qx "allowusers ${ADMIN_USER}" <<<"${effective_config}" ||
-      config_error="SSH 最终配置未能只允许用户 ${ADMIN_USER} 登录。"
   fi
 
   if [[ -n "${config_error}" ]]; then
     warn "SSH 配置校验失败，正在恢复原配置"
-    cp -a "${rollback_dir}/sshd_config" /etc/ssh/sshd_config
-    if [[ "${had_drop_in}" == "yes" ]]; then
-      cp -a "${rollback_dir}/ssh_drop_in" "${SSH_DROP_IN}"
-    else
-      rm -f "${SSH_DROP_IN}"
-    fi
+    restore_ssh_config "${rollback_dir}" "${had_drop_in}"
     rm -rf "${rollback_dir}"
     die "${config_error} 已恢复原配置，SSH 服务未重载。"
   fi
 
+  if ! reload_ssh ||
+    ! ss -lntH "sport = :${SSH_PORT}" | grep -q .; then
+    warn "SSH 未能在 ${SSH_PORT} 端口正常监听，正在恢复原配置"
+    restore_ssh_config "${rollback_dir}" "${had_drop_in}"
+    reload_ssh || true
+    rm -rf "${rollback_dir}"
+    die "SSH 端口切换失败，已恢复原配置。"
+  fi
+
   rm -rf "${rollback_dir}"
-  systemctl reload ssh
 }
 
 configure_fail2ban() {
@@ -525,7 +547,7 @@ show_summary() {
   log "初始化完成"
   printf '\nSSH 最终配置：\n'
   sshd -T | grep -E \
-    '^(port|permitrootlogin|passwordauthentication|pubkeyauthentication|allowusers|maxauthtries) '
+    '^(port|permitrootlogin|passwordauthentication|pubkeyauthentication|maxauthtries) '
 
   if [[ "${ENABLE_UFW}" == "yes" ]]; then
     printf '\n防火墙状态：\n'
