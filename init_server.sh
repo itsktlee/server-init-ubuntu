@@ -9,8 +9,8 @@ ADMIN_USER="${ADMIN_USER:-}"
 # SSH 端口。云厂商防火墙也必须放行相同的 TCP 端口。
 SSH_PORT="${SSH_PORT:-201}"
 
-# 时区。
-TIMEZONE="${TIMEZONE:-Asia/Shanghai}"
+# 时区。auto 会根据服务器公网出口 IP 推断；也可指定 America/New_York 等值。
+TIMEZONE="${TIMEZONE:-auto}"
 
 # 额外开放的 TCP 端口，以空格分隔。默认不开放业务端口。
 # 示例：PUBLIC_TCP_PORTS="80 443"
@@ -75,6 +75,44 @@ validate_yes_no() {
   local value="$2"
   [[ "${value}" == "yes" || "${value}" == "no" ]] ||
     die "${name} 只能设置为 yes 或 no。"
+}
+
+is_valid_timezone() {
+  local timezone="$1"
+
+  [[ "${timezone}" =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$ ]] &&
+    [[ -e "/usr/share/zoneinfo/${timezone}" ]]
+}
+
+resolve_timezone() {
+  if [[ "${TIMEZONE}" != "auto" ]]; then
+    is_valid_timezone "${TIMEZONE}" ||
+      die "无效时区：${TIMEZONE}。请使用 America/New_York 这类 IANA 时区名称。"
+    return 0
+  fi
+
+  local detected_timezone
+  local lookup_url
+  local -a lookup_urls=(
+    "https://ipinfo.io/timezone"
+    "https://ipapi.co/timezone"
+  )
+
+  log "根据服务器公网出口 IP 自动识别时区"
+  for lookup_url in "${lookup_urls[@]}"; do
+    detected_timezone="$(
+      curl --proto '=https' --tlsv1.2 -fsS --max-time 8 "${lookup_url}" |
+        tr -d '\r\n' || true
+    )"
+    if is_valid_timezone "${detected_timezone}"; then
+      TIMEZONE="${detected_timezone}"
+      log "识别到时区：${TIMEZONE}"
+      return 0
+    fi
+  done
+
+  TIMEZONE="UTC"
+  warn "无法根据公网 IP 识别时区，已安全回退到 UTC。"
 }
 
 validate_environment() {
@@ -174,6 +212,26 @@ validate_settings() {
   done
 }
 
+configure_passwordless_sudo() {
+  local sudoers_file="/etc/sudoers.d/90-${ADMIN_USER}-nopasswd"
+  local sudoers_temp
+  sudoers_temp="$(mktemp)"
+
+  log "配置 ${ADMIN_USER} 使用 sudo 时无需输入密码"
+  printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "${ADMIN_USER}" >"${sudoers_temp}"
+  chmod 0440 "${sudoers_temp}"
+
+  if ! visudo -cf "${sudoers_temp}" >/dev/null; then
+    rm -f "${sudoers_temp}"
+    die "免密码 sudo 配置校验失败，未修改系统 sudoers。"
+  fi
+
+  install -o root -g root -m 0440 "${sudoers_temp}" "${sudoers_file}"
+  rm -f "${sudoers_temp}"
+  visudo -cf /etc/sudoers >/dev/null ||
+    die "系统 sudoers 完整配置校验失败。"
+}
+
 install_base_system() {
   log "更新软件包索引"
   apt-get update
@@ -191,6 +249,7 @@ install_base_system() {
     lsof dnsutils jq bash-completion iproute2 \
     ufw chrony fail2ban
 
+  resolve_timezone
   log "设置时区为 ${TIMEZONE}"
   timedatectl set-timezone "${TIMEZONE}"
   systemctl enable --now chrony
@@ -583,6 +642,7 @@ main() {
   validate_environment
   prepare_admin_user
   validate_settings
+  configure_passwordless_sudo
   install_base_system
   configure_ssh
   configure_fail2ban
