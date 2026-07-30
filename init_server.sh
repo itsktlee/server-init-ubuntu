@@ -6,8 +6,8 @@ set -Eeuo pipefail
 # 运行时会交互询问要创建并允许 SSH 登录的管理员用户名。
 ADMIN_USER="${ADMIN_USER:-}"
 
-# SSH 端口。云厂商防火墙也必须放行相同的 TCP 端口。
-SSH_PORT="${SSH_PORT:-201}"
+# SSH 端口。默认在运行时询问，也可通过 SSH_PORT 环境变量指定。
+SSH_PORT="${SSH_PORT:-}"
 
 # 时区。auto 会根据服务器公网出口 IP 推断；也可指定 America/New_York 等值。
 TIMEZONE="${TIMEZONE:-auto}"
@@ -75,6 +75,28 @@ validate_yes_no() {
   local value="$2"
   [[ "${value}" == "yes" || "${value}" == "no" ]] ||
     die "${name} 只能设置为 yes 或 no。"
+}
+
+is_valid_port() {
+  local port="$1"
+  [[ "${port}" =~ ^[1-9][0-9]{0,4}$ ]] && ((port <= 65535))
+}
+
+prompt_ssh_port() {
+  local port_input
+
+  if [[ -n "${SSH_PORT}" ]]; then
+    return 0
+  fi
+
+  while true; do
+    read -r -p "请输入 SSH 端口（1-65535，请先在云防火墙放行）: " port_input
+    if is_valid_port "${port_input}"; then
+      SSH_PORT="${port_input}"
+      return 0
+    fi
+    warn "端口必须是 1 到 65535 之间的数字，请重新输入。"
+  done
 }
 
 is_valid_timezone() {
@@ -181,8 +203,7 @@ validate_settings() {
   sudo -l -U "${ADMIN_USER}" >/dev/null 2>&1 ||
     die "用户 ${ADMIN_USER} 的 sudo 权限配置失败。"
 
-  [[ "${SSH_PORT}" =~ ^[0-9]+$ ]] &&
-    ((SSH_PORT >= 1 && SSH_PORT <= 65535)) ||
+  is_valid_port "${SSH_PORT}" ||
     die "SSH_PORT 必须是 1 到 65535 之间的数字。"
 
   [[ "${SWAP_SIZE_MB}" =~ ^[0-9]+$ ]] && ((SWAP_SIZE_MB >= 512)) ||
@@ -641,6 +662,7 @@ show_summary() {
 main() {
   validate_environment
   prepare_admin_user
+  prompt_ssh_port
   validate_settings
   configure_passwordless_sudo
   install_base_system
