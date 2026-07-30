@@ -30,10 +30,10 @@ sudo ./init_server.sh
 - 输入你自己的新用户名
 - 输入两次新用户密码，输入时终端不会显示字符
 - 如果输入的用户已经存在，确认是否复用以及是否重设密码
+- 输入要使用的 SSH 端口，并检查端口范围是否有效
 
-脚本随后会创建用户、加入 `sudo` 组，并配置 SSH：
+脚本随后会创建用户、加入 `sudo` 组，并按你输入的端口配置 SSH：
 
-- SSH 端口改为 `201`
 - 可以使用用户名和密码登录
 - 也保留 SSH 密钥登录能力
 - 禁止 root 通过 SSH 登录
@@ -55,16 +55,22 @@ sudo ./init_server.sh
 sudo TIMEZONE=America/New_York ./init_server.sh
 ```
 
-运行脚本前，云服务器必须先在云厂商防火墙中放行 TCP `201`。新连接使用：
+输入的 SSH 端口必须同时在云厂商防火墙中放行。新连接使用：
 
 ```bash
-ssh -p 201 新用户名@服务器IP
+ssh -p 你输入的端口 新用户名@服务器IP
 ```
 
 如需非交互指定用户名，也可以执行下面的命令，但密码仍会交互输入：
 
 ```bash
 sudo ADMIN_USER=myuser ./init_server.sh
+```
+
+SSH 端口也可以通过环境变量提前指定：
+
+```bash
+sudo SSH_PORT=2201 ./init_server.sh
 ```
 
 ## 防火墙
